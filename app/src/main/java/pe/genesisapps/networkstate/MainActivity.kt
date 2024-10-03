@@ -1,14 +1,20 @@
 package pe.genesisapps.networkstate
 
+import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
@@ -23,6 +29,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -37,8 +45,55 @@ class MainActivity : ComponentActivity() {
                 NetworkScreen()
             }
         }
+        requestPermission()
+        startService()
+    }
+
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ){ isGranted : Boolean ->
+        if(isGranted){
+            Toast.makeText(this,"Permission allowed", Toast.LENGTH_LONG).show()
+        }
+        else{
+            Toast.makeText(this,"Permission denied", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun requestPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+        when {
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED -> {
+                startService()
+                // Permission is granted
+            }
+
+            ActivityCompat.shouldShowRequestPermissionRationale(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) -> {
+                // Additional rationale should be triggered
+                // For now simply ask for Notification Permission for testing purpose
+                requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+
+            else -> {
+                // Permission has not been asked yet
+                requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
+    private fun startService(){
+        val serviceIntent = Intent(this, NetworkConnectionService::class.java)
+        startService(serviceIntent)
     }
 }
+
+
 
 @Composable
 fun NetworkScreen() {
@@ -63,10 +118,11 @@ fun NetworkScreen() {
 sealed interface NetworkConnectionState {
     data object Available : NetworkConnectionState
     data object Unavailable : NetworkConnectionState
+    data object AvailableInternet : NetworkConnectionState
 }
 
 
-private fun networkCallback(callback: (NetworkConnectionState) -> Unit): ConnectivityManager.NetworkCallback =
+fun networkCallback(callback: (NetworkConnectionState) -> Unit): ConnectivityManager.NetworkCallback =
     object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             callback(NetworkConnectionState.Available)
@@ -84,7 +140,32 @@ fun getCurrentConnectivityState(connectivityManager: ConnectivityManager): Netwo
         .getNetworkCapabilities(network)
         ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ?: false
 
-    return if (isConnected) NetworkConnectionState.Available else NetworkConnectionState.Unavailable
+    val isConnectedAndHaveInternet = connectivityManager
+        .getNetworkCapabilities(network)
+        ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) ?: false
+
+    return if (isConnected) {
+        NetworkConnectionState.Available
+    } else if (isConnectedAndHaveInternet) {
+        NetworkConnectionState.AvailableInternet
+    } else {
+        NetworkConnectionState.Unavailable
+    }
+
+    //return if (isConnected) NetworkConnectionState.Available else NetworkConnectionState.Unavailable
+    /*
+    val networkCapabilities = connectivityManager.getNetworkCapabilities(network)
+
+    val hasInternetCapability = networkCapabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ?: false
+    val isValidated = networkCapabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) ?: false
+
+    // Verifica si tiene capacidad de Internet y si la conexión está validada
+    return if (hasInternetCapability && isValidated) {
+        NetworkConnectionState.Available
+    } else {
+        NetworkConnectionState.Unavailable
+    }
+    * */
 }
 
 fun Context.observeConnectivityAsFlow(): Flow<NetworkConnectionState> = callbackFlow {
